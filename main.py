@@ -2,10 +2,8 @@ import argparse
 from matplotlib import pyplot as plt
 import os
 import sys
-from numpy.core.defchararray import join
 import ctypes
 
-#import pydensecrf
 libgcc_s = ctypes.CDLL('libgcc_s.so.1') # libgcc_s.so.1 error workaround
 from nets import *
 import numpy as np
@@ -20,8 +18,11 @@ import gzip
 import math
 from PIL import Image, ImageDraw, ImageFont
 import ffmpeg
-#from pydensecrf import densecrf as denseCRF
+import denseCRF
+import vision_transformer as vits
+from torchvision import transforms as pth_transforms
 
+device = T.device("cuda") if T.cuda.is_available() else T.device("cpu")
 
 def get_moving_avg(x, n=10):
     cumsum = np.cumsum(x)
@@ -68,10 +69,13 @@ class Handler():
         self.args = args
         argdict = args.__dict__
         self.font = ImageFont.truetype("./isy_minerl/segm/etc/Ubuntu-R.ttf", 10)
-        self.device = "cuda" if T.cuda.is_available() else "cpu"
+        self.device = device
         print("device:", self.device)
         self.models = dict()
-        self.criticname = "critic"
+        if vits:
+            self.criticname = "vitsCritic"
+        else:
+            self.criticname = "critic"
         self.maskername = "masker"
 
         self.ious = 0, 0
@@ -105,7 +109,21 @@ class Handler():
 
     def reset_models(self):
         args = self.args
-        self.critic = NewCritic(bottleneck=args.neck, chfak=args.chfak, dropout=args.dropout)
+        if(args.vits):
+            self.critic = ThreeFCL()
+            self.vitscritic = vits.__dict__[args.arch](patch_size=args.patch_size, drop_path_rate=args.dropout, num_classes=0)
+            if os.path.isfile(args.pretrain):
+                state_dict = T.load(args.pretrain, map_location="cpu")
+                # remove `module.` prefix
+                state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+                # remove `backbone.` prefix induced by multicrop wrapper
+                state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
+                msg = self.vitscritic.load_state_dict(state_dict, strict=False)
+                print(
+                    'Pretrained weights found at {} and loaded with msg: {}'.format(args.pretrain,
+                                                                                    msg))
+        else:
+            self.critic = NewCritic(bottleneck=args.neck, chfak=args.chfak, dropout=args.dropout)
         self.masker = UnetDecoder(bottleneck=args.neck, chfak=args.chfak)
         if self.args.separate:
             self.sepcrit = NewCritic(bottleneck=args.neck, chfak=args.chfak, dropout=args.dropout)
@@ -127,12 +145,20 @@ class Handler():
                                        T.from_numpy(self.Y).t(),
                                        T.arange(self.X.shape[0], dtype=T.int32)),
             batch_size=batch_size, shuffle=True)
-        # self.test_loader = T.utils.data.DataLoader(
-        #    T.utils.data.TensorDataset(T.from_numpy(self.XX),
-        #                               T.from_numpy(self.YY),
-        #                               T.arange(self.XX.shape[0], dtype=T.int32)),
-        #        batch_size=batch_size, shuffle=True)
+        self.test_loader = []
+        loaderSize = args.testsize / args.numLoader
+        for i in range(args.numLoader):
+            start = int(i * loaderSize)
+            end = int((i+1) * loaderSize)
+            XXTemp = self.XX[start:end]
+            YYTemp = self.YY[:, start:end]
 
+            test_loader = T.utils.data.DataLoader(
+               T.utils.data.TensorDataset(T.from_numpy(XXTemp),
+                                          T.from_numpy(YYTemp).t(),
+                                          T.arange(XXTemp.shape[0], dtype=T.int32)),
+                   batch_size=batch_size, shuffle=True)
+            self.test_loader.append(test_loader)
     def load_models(self, modelnames=[]):
         if not modelnames:
             modelnames = self.models.keys()
@@ -158,8 +184,10 @@ class Handler():
     def critic_pipe(self, mode="train", test=0):
         args = self.args
         testf = mode == "test"
-        trainf = mode == "train"
         loader = self.train_loader
+
+
+
 
         if args.cload and self.load_models([self.criticname]):
             print("loaded critic, no new training")
@@ -175,7 +203,29 @@ class Handler():
 
         critic = self.critic
         critic = critic.to(self.device)
+        resizer = pth_transforms.Compose(
+            [
+                pth_transforms.Resize(args.image_size),
+            ]
+        )
+        transform = pth_transforms.Compose(
+            [
+
+                pth_transforms.Normalize(
+                    (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                ),
+            ]
+        )
+        if args.vits:
+
+            vitscritic = self.vitscritic
+            vitscritic = vitscritic.to(self.device)
+
+            for p in vitscritic.parameters():
+                p.requires_grad = False
+            vitscritic.eval()
         opti = T.optim.Adam(critic.parameters())
+
         if args.directeval:
             ious = self.eval()
         # Epoch and Batch Loops
@@ -187,6 +237,11 @@ class Handler():
 
                 # FORMATING
                 XP = X.permute(0, 3, 1, 2).float().to(self.device) / 255.0
+                if(args.vits):
+                    XP = resizer(XP)
+                    XP = transform(XP)
+                    XP = vitscritic(XP)
+
                 Y = Y[:, args.rewidx].float().to(self.device)
                 pred = critic(XP).squeeze()
                 if args.threshrew:
@@ -233,7 +288,75 @@ class Handler():
             plt.ylim(0, plt.ylim()[1])
             plt.legend()
             plt.savefig(result_path + "_loss.png")
-        print()
+
+    def test_critic(self):
+        args = self.args
+        loaderlist = self.test_loader
+
+        # Setup save path and Logger
+        result_path = self.path + "testcritic/"
+        os.makedirs(result_path, exist_ok=True)
+        log_file = open(result_path + "log.txt", "w")
+        log_file.write(f"{self.args}\n\n")
+        resizer = pth_transforms.Compose(
+            [
+                pth_transforms.Resize(args.image_size),
+            ]
+        )
+        transform = pth_transforms.Compose(
+            [
+
+                pth_transforms.Normalize(
+                    (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                ),
+            ]
+        )
+
+        finalllog = []
+
+        critic = self.critic
+        critic = critic.to(self.device)
+        if(args.vits):
+
+            vitscritic = self.vitscritic
+            vitscritic = vitscritic.to(self.device)
+            for p in vitscritic.parameters():
+                p.requires_grad = False
+            vitscritic.eval()
+
+        opti = T.optim.Adam(critic.parameters())
+        # Epoch and Batch Loops
+        for loader in loaderlist:
+            llog = []
+            for b_idx, (X, Y, I) in enumerate(loader):
+                # SHIFT
+                if args.shift:
+                    X = self.shift_batch(X)
+
+                # FORMATING
+
+                XP = X.permute(0, 3, 1, 2).float().to(self.device) / 255.0
+                Y = Y[:, args.rewidx].float().to(self.device)
+                if(args.vits):
+                    XP = resizer(XP)
+                    XP = transform(XP)
+                    XP = vitscritic(XP)
+
+
+
+                pred = critic(XP).squeeze()
+                if args.threshrew:
+                    loss = F.binary_cross_entropy(pred, Y)
+                else:
+                    loss = F.mse_loss(pred, Y)
+                opti.zero_grad()
+                loss.backward()
+                opti.step()
+                llog.append(loss.item())
+            print(np.mean(llog))
+            finalllog.append(np.mean(llog))
+        print(np.mean(finalllog))
+
 
     def extract_contrastive_data(self):
         args = self.args
@@ -1461,6 +1584,19 @@ class Handler():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-train", action="store_true")
+
+    parser.add_argument("-vits", action="store_true")
+    parser.add_argument("-vitsfreeze", action="store_true")
+    parser.add_argument('--patch_size', default=8, type=int, help='Patch resolution of the model.')
+    parser.add_argument("--image_size", default=(128, 128), type=int, nargs="+", help="Resize image.")
+    parser.add_argument('--pretrain', default='NeededFiles/dino_deitsmall8_pretrain.pth', type=str)
+    parser.add_argument("--dropout", type=float, default=0.3)
+
+    parser.add_argument('--arch', default='vit_small', type=str,
+                        choices=['vit_tiny', 'vit_small', 'vit_base'], help='Architecture (support only ViT atm).')
+
+
+
     parser.add_argument("-cleaned", action="store_true")
     parser.add_argument("-frozen", action="store_true")
     parser.add_argument("-masker", type=bool, default=True)
@@ -1470,6 +1606,7 @@ def main():
     parser.add_argument("-staticnorm", type=bool, default=True)
     parser.add_argument("-clippify", action="store_true")
     parser.add_argument("-debug", action="store_true")
+    parser.add_argument("-testcritic", action="store_true")
     parser.add_argument("-noinject", action="store_true")
     parser.add_argument("-freeze", action="store_true")
     parser.add_argument("-viscritic", action="store_true")
@@ -1497,9 +1634,10 @@ def main():
 
     parser.add_argument("--salience-thresh", type=float, default="1.5")
     parser.add_argument("--eval-thresh", type=float, default=0.05)
-    parser.add_argument("--dropout", type=float, default=0.3)
+
     parser.add_argument("--lr", type=float, default=0.00005)
     parser.add_argument("--threshrew", type=float, default=0)
+    parser.add_argument("--numLoader", type=int, default=5)
     parser.add_argument("--trainasvis", type=int, default=0)
     parser.add_argument("--false", type=bool, default=False)
     parser.add_argument("--envname", type=str, default="Treechop")
@@ -1523,6 +1661,7 @@ def main():
     parser.add_argument("--rewidx", type=int, default=1)
     parser.add_argument("--gammas", type=str, default="0.98-0.97-0.96-0.95")
     parser.add_argument("--testsize", type=int, default=5000)
+
     parser.add_argument("--datasize", type=int, default=100000)
     parser.add_argument("--name", type=str, default="default-model")
     parser.add_argument("--model", type=str, default="default-model")
@@ -1543,8 +1682,7 @@ def main():
         args.visbesteval = True
         args.crf = False
         args.salience = True
-    
-    #print(args)
+
     H = Handler(args)
     if args.train:
         H.load_data()
@@ -1559,6 +1697,9 @@ def main():
         if args.critic:
             H.critic_pipe(mode="train")
             H.save_models(modelnames=[H.criticname])
+            if args.testcritic:
+                H.test_critic()
+        exit()
         if args.masker:
             H.segmentation_training()
             H.save_models(modelnames=[H.maskername])

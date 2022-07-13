@@ -15,6 +15,20 @@ class Printer(nn.Module):
         print(X.shape)
         return X
 
+class ThreeFCL(nn.Module):  # frzdino
+    def __init__(self, indim=384):
+        super(ThreeFCL, self).__init__()
+        self.three_fcl_stack = nn.Sequential(
+            nn.Linear(indim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
+
+    def forward(self, x):
+        x = self.three_fcl_stack(x)
+        return x
 
 class AutoEncoder(nn.Module):
     def __init__(self, width, enc_dim, colorchs, activation=nn.Tanh):
