@@ -145,20 +145,30 @@ class Handler():
                                        T.from_numpy(self.Y).t(),
                                        T.arange(self.X.shape[0], dtype=T.int32)),
             batch_size=batch_size, shuffle=True)
-        self.test_loader = []
-        loaderSize = args.testsize / args.numLoader
-        for i in range(args.numLoader):
-            start = int(i * loaderSize)
-            end = int((i+1) * loaderSize)
-            XXTemp = self.XX[start:end]
-            YYTemp = self.YY[:, start:end]
 
-            test_loader = T.utils.data.DataLoader(
-               T.utils.data.TensorDataset(T.from_numpy(XXTemp),
-                                          T.from_numpy(YYTemp).t(),
-                                          T.arange(XXTemp.shape[0], dtype=T.int32)),
-                   batch_size=batch_size, shuffle=True)
-            self.test_loader.append(test_loader)
+        if args.oneep:
+            self.X2, self.Y2, self.I2 = self.collect_data(epis=True)
+            self.ep_loader = T.utils.data.DataLoader(
+                T.utils.data.TensorDataset(T.from_numpy(self.X2),
+                                           T.from_numpy(self.Y2).t(),
+                                           T.arange(self.X2.shape[0], dtype=T.int32)),
+                batch_size=1000)
+
+        if(args.testcritic):
+            self.test_loader = []
+            loaderSize = args.testsize / args.numLoader
+            for i in range(args.numLoader):
+                start = int(i * loaderSize)
+                end = int((i+1) * loaderSize)
+                XXTemp = self.XX[start:end]
+                YYTemp = self.YY[:, start:end]
+
+                test_loader = T.utils.data.DataLoader(
+                   T.utils.data.TensorDataset(T.from_numpy(XXTemp),
+                                              T.from_numpy(YYTemp).t(),
+                                              T.arange(XXTemp.shape[0], dtype=T.int32)),
+                       batch_size=batch_size, shuffle=True)
+                self.test_loader.append(test_loader)
     def load_models(self, modelnames=[]):
         if not modelnames:
             modelnames = self.models.keys()
@@ -298,6 +308,7 @@ class Handler():
         os.makedirs(result_path, exist_ok=True)
         log_file = open(result_path + "log.txt", "w")
         log_file.write(f"{self.args}\n\n")
+
         resizer = pth_transforms.Compose(
             [
                 pth_transforms.Resize(args.image_size),
@@ -353,9 +364,13 @@ class Handler():
                 loss.backward()
                 opti.step()
                 llog.append(loss.item())
-            print(np.mean(llog))
-            finalllog.append(np.mean(llog))
+            logOne = np.mean(llog)
+            print(logOne)
+            finalllog.append(logOne)
+            log_file.write(f"loss: {logOne}")
+
         print(np.mean(finalllog))
+        log_file.write((f" \n avg loss: {np.mean(finalllog)}  std: {np.std(finalllog)}" ))
 
 
     def extract_contrastive_data(self):
@@ -1392,7 +1407,7 @@ class Handler():
         iou = intersection / union
         return round(iou, 3)
 
-    def collect_data(self):
+    def collect_data(self, epis=False):
         args = self.args
         datadir = self.data_path
         envname = args.envname
@@ -1414,12 +1429,19 @@ class Handler():
         names = data.get_trajectory_names()
 
         size = args.datasize + args.testsize
+        if(epis):
+            size = 200
         # np.random.default_rng().shuffle(names)
         X = np.zeros((size, 64, 64, 3), dtype=np.uint8)
         Y = np.zeros((7, size), dtype=np.float)
         I = np.zeros(size, dtype=np.uint16)
         print("collecting straight data set with", args.datasize, "+", args.testsize, "frames")
 
+        if args.oneep:
+            pickedep = args.pickep
+            names.remove(pickedep)
+            if epis:
+                names = [pickedep]
         # DEV
         full_ep_lens = 0
 
@@ -1587,10 +1609,13 @@ def main():
 
     parser.add_argument("-vits", action="store_true")
     parser.add_argument("-vitsfreeze", action="store_true")
+    parser.add_argument("-oneep", action="store_true")
     parser.add_argument('--patch_size', default=8, type=int, help='Patch resolution of the model.')
     parser.add_argument("--image_size", default=(128, 128), type=int, nargs="+", help="Resize image.")
     parser.add_argument('--pretrain', default='NeededFiles/dino_deitsmall8_pretrain.pth', type=str)
     parser.add_argument("--dropout", type=float, default=0.3)
+
+    parser.add_argument('--pickep', default='v3_absolute_grape_changeling-7_14600-16079', type=str)
 
     parser.add_argument('--arch', default='vit_small', type=str,
                         choices=['vit_tiny', 'vit_small', 'vit_base'], help='Architecture (support only ViT atm).')
@@ -1637,7 +1662,7 @@ def main():
 
     parser.add_argument("--lr", type=float, default=0.00005)
     parser.add_argument("--threshrew", type=float, default=0)
-    parser.add_argument("--numLoader", type=int, default=5)
+    parser.add_argument("--numLoader", type=int, default=10)
     parser.add_argument("--trainasvis", type=int, default=0)
     parser.add_argument("--false", type=bool, default=False)
     parser.add_argument("--envname", type=str, default="Treechop")
@@ -1660,7 +1685,7 @@ def main():
     parser.add_argument("--visevery", type=int, default=100)
     parser.add_argument("--rewidx", type=int, default=1)
     parser.add_argument("--gammas", type=str, default="0.98-0.97-0.96-0.95")
-    parser.add_argument("--testsize", type=int, default=5000)
+    parser.add_argument("--testsize", type=int, default=10000)
 
     parser.add_argument("--datasize", type=int, default=100000)
     parser.add_argument("--name", type=str, default="default-model")

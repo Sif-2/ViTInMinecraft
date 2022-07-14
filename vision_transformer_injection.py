@@ -79,11 +79,26 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, savekqv=False):
+    def forward(self, x, savekqv=False, injectcls = None, letter=0):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         kqvvalues = {}
+        if(letter != 0):
+            if(injectcls != None):
+                if letter == 1:
+                    q[:, :, 0, :] = injectcls
+                elif letter == 2:
+                    k[:, :, 0, :] = injectcls
+                else:
+                    v[:, :, 0, :] = injectcls
+            else:
+                if letter == 1 :
+                    cls = q[:, :, 0, :].clone().detach()
+                elif letter == 2:
+                    cls = k[:, :, 0, :].clone().detach()
+                else:
+                    cls = v[:, :, 0, :].clone().detach()
         if (savekqv):
             kqvvalues["qvalue"] = q
             kqvvalues["kvalue"] = k
@@ -95,6 +110,11 @@ class Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
+
+        if(letter != 0):
+            if(injectcls != None):
+                cls = injectcls
+            return x, attn, kqvvalues, cls
         return x, attn, kqvvalues
 
 
@@ -110,14 +130,33 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, return_attention=False, savekqv=False):
-        y, attn, kqvvalues = self.attn(self.norm1(x), savekqv)
+    def forward(self, x, return_attention=False, savekqv=False, clsAndOutp=False, clsAndAttn=False, injectCls = None, letter=0):
+        clstemp = x[:, 0, :].clone().detach()
+        if(letter == 0):
+            if injectCls != None:
+                x[:, 0, :] = injectCls
+            y, attn, kqvvalues = self.attn(self.norm1(x), savekqv)
+        else:
+            if injectCls != None:
+                y, attn, kqvvalues, clsqkv = self.attn(self.norm1(x), savekqv, injectcls=injectCls, letter=letter)
+            else:
+                y, attn, kqvvalues, clsqkv = self.attn(self.norm1(x), savekqv,  letter=letter)
+
+
+        if(letter == 0):
+            clsReturn = clstemp
+        else:
+            clsReturn = clsqkv
         if return_attention:
             return attn
+        if clsAndAttn:
+            return attn, clsReturn
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         if savekqv:
             return x, kqvvalues
+        if clsAndOutp:
+            return x, clsReturn
         return x
 
 
@@ -231,6 +270,76 @@ class VisionTransformer(nn.Module):
             else:
                 # return attention of the last block
                 return blk(x, return_attention=True)
+
+
+    def get_last_self_and_cls(self, x, layerToGet):
+        cls = None
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                if i == layerToGet:
+                    x, clsx = blk(x, clsAndOutp=True)
+                    cls = clsx
+                else:
+                    x = blk(x)
+            else:
+                if cls == None:
+                    attn, clsx = blk(x, clsAndAttn=True)
+                    cls = clsx
+                else:
+                    attn = blk(x, return_attention=True)
+                return attn, cls
+
+    def get_last_self_and_clsqkv(self, x, layerToGet, pickedLetter):
+        cls = None
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                if i == layerToGet:
+                    x, clsx = blk(x, clsAndOutp=True, letter=pickedLetter)
+                    cls = clsx
+                else:
+                    x = blk(x)
+            else:
+                if cls == None:
+                    attn, clsx = blk(x, clsAndAttn=True, letter=pickedLetter)
+                    cls = clsx
+                else:
+                    attn = blk(x, return_attention=True)
+                return attn, cls
+
+    def inject_clsqkv(self, x, layerToInject, cls, pickedletter):
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                if i == layerToInject:
+                    x = blk(x, injectCls=cls, letter=pickedletter)
+                else:
+                    x = blk(x)
+            else:
+                if layerToInject == 11:
+                    attn = blk(x, return_attention=True, injectCls=cls, letter=pickedletter)
+                    return attn
+                else:
+                    attn = blk(x, return_attention=True)
+                    return attn
+
+
+    def inject_cls(self, x, layerToInject, cls):
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                if i == layerToInject:
+                    x = blk(x, injectCls=cls)
+                else:
+                    x = blk(x)
+            else:
+                if layerToInject == 11:
+                    attn = blk(x, return_attention=True, injectCls=cls)
+                    return attn
+                else:
+                    attn = blk(x, return_attention=True)
+                    return attn
 
     def get_intermediate_layers(self, x, n=1):
         x = self.prepare_tokens(x)
