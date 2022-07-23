@@ -79,26 +79,11 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, savekqv=False, injectcls = None, letter=0):
+    def forward(self, x, savekqv=False):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         kqvvalues = {}
-        if(letter != 0):
-            if(injectcls != None):
-                if letter == 1:
-                    q[:, :, 0, :] = injectcls
-                elif letter == 2:
-                    k[:, :, 0, :] = injectcls
-                else:
-                    v[:, :, 0, :] = injectcls
-            else:
-                if letter == 1 :
-                    cls = q[:, :, 0, :].clone().detach()
-                elif letter == 2:
-                    cls = k[:, :, 0, :].clone().detach()
-                else:
-                    cls = v[:, :, 0, :].clone().detach()
         if (savekqv):
             kqvvalues["qvalue"] = q
             kqvvalues["kvalue"] = k
@@ -110,11 +95,6 @@ class Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-
-        if(letter != 0):
-            if(injectcls != None):
-                cls = injectcls
-            return x, attn, kqvvalues, cls
         return x, attn, kqvvalues
 
 
@@ -130,33 +110,14 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, return_attention=False, savekqv=False, clsAndOutp=False, clsAndAttn=False, injectCls = None, letter=0):
-        clstemp = x[:, 0, :].clone().detach()
-        if(letter == 0):
-            if injectCls != None:
-                x[:, 0, :] = injectCls
-            y, attn, kqvvalues = self.attn(self.norm1(x), savekqv)
-        else:
-            if injectCls != None:
-                y, attn, kqvvalues, clsqkv = self.attn(self.norm1(x), savekqv, injectcls=injectCls, letter=letter)
-            else:
-                y, attn, kqvvalues, clsqkv = self.attn(self.norm1(x), savekqv,  letter=letter)
-
-
-        if(letter == 0):
-            clsReturn = clstemp
-        else:
-            clsReturn = clsqkv
+    def forward(self, x, return_attention=False, savekqv=False):
+        y, attn, kqvvalues = self.attn(self.norm1(x), savekqv)
         if return_attention:
             return attn
-        if clsAndAttn:
-            return attn, clsReturn
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         if savekqv:
             return x, kqvvalues
-        if clsAndOutp:
-            return x, clsReturn
         return x
 
 
@@ -271,76 +232,6 @@ class VisionTransformer(nn.Module):
                 # return attention of the last block
                 return blk(x, return_attention=True)
 
-
-    def get_last_self_and_cls(self, x, layerToGet):
-        cls = None
-        x = self.prepare_tokens(x)
-        for i, blk in enumerate(self.blocks):
-            if i < len(self.blocks) - 1:
-                if i == layerToGet:
-                    x, clsx = blk(x, clsAndOutp=True)
-                    cls = clsx
-                else:
-                    x = blk(x)
-            else:
-                if cls == None:
-                    attn, clsx = blk(x, clsAndAttn=True)
-                    cls = clsx
-                else:
-                    attn = blk(x, return_attention=True)
-                return attn, cls
-
-    def get_last_self_and_clsqkv(self, x, layerToGet, pickedLetter):
-        cls = None
-        x = self.prepare_tokens(x)
-        for i, blk in enumerate(self.blocks):
-            if i < len(self.blocks) - 1:
-                if i == layerToGet:
-                    x, clsx = blk(x, clsAndOutp=True, letter=pickedLetter)
-                    cls = clsx
-                else:
-                    x = blk(x)
-            else:
-                if cls == None:
-                    attn, clsx = blk(x, clsAndAttn=True, letter=pickedLetter)
-                    cls = clsx
-                else:
-                    attn = blk(x, return_attention=True)
-                return attn, cls
-
-    def inject_clsqkv(self, x, layerToInject, cls, pickedletter):
-        x = self.prepare_tokens(x)
-        for i, blk in enumerate(self.blocks):
-            if i < len(self.blocks) - 1:
-                if i == layerToInject:
-                    x = blk(x, injectCls=cls, letter=pickedletter)
-                else:
-                    x = blk(x)
-            else:
-                if layerToInject == 11:
-                    attn = blk(x, return_attention=True, injectCls=cls, letter=pickedletter)
-                    return attn
-                else:
-                    attn = blk(x, return_attention=True)
-                    return attn
-
-
-    def inject_cls(self, x, layerToInject, cls):
-        x = self.prepare_tokens(x)
-        for i, blk in enumerate(self.blocks):
-            if i < len(self.blocks) - 1:
-                if i == layerToInject:
-                    x = blk(x, injectCls=cls)
-                else:
-                    x = blk(x)
-            else:
-                if layerToInject == 11:
-                    attn = blk(x, return_attention=True, injectCls=cls)
-                    return attn
-                else:
-                    attn = blk(x, return_attention=True)
-                    return attn
-
     def get_intermediate_layers(self, x, n=1):
         x = self.prepare_tokens(x)
         # we return the output tokens from the `n` last blocks
@@ -360,7 +251,7 @@ class VisionTransformer(nn.Module):
 
         return kqvlist
 
-    def getKMeansPredictor(self, qvalues, kvalues, vvalues, numCluster):
+    def getKMeansPredictor(self, qvalues, kvalues, vvalues, numCluster, alreadyCpu=False):
         nh = qvalues.shape[1]  # number of heads
         kmeansq = []
         kmeansk = []
@@ -371,7 +262,10 @@ class VisionTransformer(nn.Module):
             a = qtemp.shape[0]
             b = qtemp.shape[1]
             c = qtemp.shape[2]
-            qtemp = qtemp.reshape(a * b, c).cpu().numpy()
+            if(alreadyCpu):
+                qtemp = qtemp.reshape(a * b, c)
+            else:
+                qtemp = qtemp.reshape(a * b, c).cpu().numpy()
             kmeansq2 = KMeans(n_clusters=numCluster).fit(qtemp)
             kmeansq.append(kmeansq2)
 
@@ -380,7 +274,10 @@ class VisionTransformer(nn.Module):
             a = ktemp.shape[0]
             b = ktemp.shape[1]
             c = ktemp.shape[2]
-            ktemp = ktemp.reshape(a * b, c).cpu().numpy()
+            if(alreadyCpu):
+                ktemp = ktemp.reshape(a * b, c)
+            else:
+                ktemp = ktemp.reshape(a * b, c).cpu().numpy()
             kmeansk2 = KMeans(n_clusters=numCluster).fit(ktemp)
             kmeansk.append(kmeansk2)
 
@@ -389,17 +286,20 @@ class VisionTransformer(nn.Module):
             a = vtemp.shape[0]
             b = vtemp.shape[1]
             c = vtemp.shape[2]
-            vtemp = vtemp.reshape(a * b, c).cpu().numpy()
+            if(alreadyCpu):
+                vtemp = vtemp.reshape(a * b, c)
+            else:
+                vtemp = vtemp.reshape(a * b, c).cpu().numpy()
             kmeansv2 = KMeans(n_clusters=numCluster).fit(vtemp)
             kmeansv.append(kmeansv2)
 
         return kmeansq, kmeansk, kmeansv
 
 
-def vit_tiny(patch_size=16, qkv_bias=True, **kwargs):
+def vit_tiny(patch_size=16, **kwargs):
     model = VisionTransformer(
         patch_size=patch_size, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4,
-        qkv_bias=qkv_bias, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
 
 
@@ -415,3 +315,39 @@ def vit_base(patch_size=16, **kwargs):
         patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
         qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
+
+class DINOHead(nn.Module):
+    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
+        super().__init__()
+        nlayers = max(nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        else:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(x)
+        return x

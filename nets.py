@@ -30,6 +30,26 @@ class ThreeFCL(nn.Module):  # frzdino
         x = self.three_fcl_stack(x)
         return x
 
+class Discriminator(nn.Module):    #
+    def __init__(self):
+        super(Discriminator, self).__init__()
+        self.main = nn.Sequential(
+            nn.Linear(4608, 2304),
+            nn.ReLU(True),
+            nn.Linear(2304, 1024),
+            nn.ReLU(True),
+            nn.Linear(1024, 512),
+            nn.ReLU(True),
+            nn.Linear(512, 256),
+            nn.ReLU(True),
+            nn.Linear(256, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, input):
+        return self.main(input)
+
+
 class AutoEncoder(nn.Module):
     def __init__(self, width, enc_dim, colorchs, activation=nn.Tanh):
         super().__init__()

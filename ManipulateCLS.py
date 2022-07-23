@@ -34,11 +34,12 @@ if __name__ == '__main__':
     parser.add_argument('--patch_size', default=8, type=int, help='Patch resolution of the model.')
     parser.add_argument('--pretrained_weights', default='NeededFiles/dino_deitsmall8_pretrain.pth', type=str,
                         help="Path to pretrained weights to load.")
-    parser.add_argument('--layertoinject', default=11, type=int)
+    parser.add_argument('--layertoinject', default=12, type=int)
     parser.add_argument('--lettertoinject', default=0, type=int)
-    parser.add_argument("--image_path1", default="TestbilderInj/cat.jpg", type=str, help="Path of the image to load.")
+    parser.add_argument("-usebias", default=False, action="store_true")
+    parser.add_argument("--image_path1", default="TestbilderInj/cat.png", type=str, help="Path of the image to load.")
     parser.add_argument("--image_path2", default="TestbilderInj/dog.jpg", type=str, help="Path of the image to load.")
-    parser.add_argument("--image_size", default=(480, 480), type=int, nargs="+", help="Resize image.")
+    parser.add_argument("--image_size", default=(128, 128), type=int, nargs="+", help="Resize image.")
     parser.add_argument('--output_dir', default='CLSInjectionTests', help='Path where to save visualizations.')
     parser.add_argument("--threshold", type=float, default=None, help="""We visualize masks
         obtained by thresholding the self-attention maps to keep xx% of the mass.""")
@@ -47,11 +48,21 @@ if __name__ == '__main__':
     img_path1 = args.image_path1
     img_path2 = args.image_path2
     # build model
-    model = vits.__dict__["vit_small"](
-        patch_size=args.patch_size,
-        num_classes=0
-        # stochastic depth
-    )
+    args.usebias = True
+    if(args.usebias):
+
+        model = vits.__dict__["vit_small"](
+            patch_size=args.patch_size,
+            num_classes=0
+            # stochastic depth
+        )
+    else:
+        model = vits.__dict__["vit_tiny"](
+            patch_size=4,
+            num_classes=0,
+            qkv_bias=False
+            # stochastic depth
+        )
 
     for p in model.parameters():
         p.requires_grad = False
