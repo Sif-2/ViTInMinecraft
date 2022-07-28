@@ -918,9 +918,11 @@ class Handler():
         )
 
 
-        pickedvidletter = [0, 1, 0, 0, 1, 1, 0, 1, 1, 0]
-        pickedvidhead = [4, 5, 5, 3, 0, 3, 2, 3, 2, 0]
-        pickedvidcluster = [3, 3, 4, 2, 4, 4, 0, 1, 1, 1]
+        with open("PickedCells/cellList", "rb") as fp:
+            pickedCells = pickle.load(fp)
+        pickedvidletter = pickedCells[0]      # [0, 1, 0, 0, 1, 1, 0, 1, 1, 0]
+        pickedvidhead = pickedCells[1]      #[4, 5, 5, 3, 0, 3, 2, 3, 2, 0]
+        pickedvidcluster = pickedCells[2]      #[3, 3, 4, 2, 4, 4, 0, 1, 1, 1]
 
 
         vitscritic = vits.__dict__['vit_small'](patch_size=16, drop_path_rate=0.1, num_classes=0)

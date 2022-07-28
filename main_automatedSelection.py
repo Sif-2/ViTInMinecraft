@@ -288,10 +288,11 @@ class Handler():
         imgsforkmean = []
         critic = self.critic
         critic = critic.to(device)
-
-        pickedvidletter = [0, 1, 0, 0, 1, 1, 0, 1, 1, 0]
-        pickedvidhead = [4, 5, 5, 3, 0, 3, 2, 3, 2, 0]
-        pickedvidcluster = [3, 3, 4, 2, 4, 4, 0, 1, 1, 1]
+        with open("PickedCells/cellList", "rb") as fp:
+            pickedCells = pickle.load(fp)
+        pickedvidletter = pickedCells[0]      # [0, 1, 0, 0, 1, 1, 0, 1, 1, 0]
+        pickedvidhead = pickedCells[1]      #[4, 5, 5, 3, 0, 3, 2, 3, 2, 0]
+        pickedvidcluster = pickedCells[2]      #[3, 3, 4, 2, 4, 4, 0, 1, 1, 1]
 
 
         for p in critic.parameters():
@@ -720,12 +721,12 @@ class Handler():
         thresholdkmeanhigh = 0.80
         takeLowestClusterNumPix = True
         amountCluster = 5
-        imgsToPrint = 500 #saddasasd
+        imgsToPrint = 500 #images to load for selection
         highvalimgtouse = 50
         usehighimgonmly = False
         layerToUse = [9]
         logger.write("LayerUsed:" + str(layerToUse) + "\n")
-        numKmeanimgs = 100  #saddasasd
+        numKmeanimgs = 100  # images used for kmean centre
         thresholdkmean = 0
         logger.write("Threshold for Kmeanimgs:" + str(thresholdkmean) + "\n")
         logger.write("highvalimgtouse:" + str(highvalimgtouse) + "\n")
@@ -1123,6 +1124,13 @@ class Handler():
                             logger.write("pickedvidletter = " + str(calcletter) + "\n")
                             logger.write("pickedvidhead = " + str(calchead) + "\n")
                             logger.write("pickedvidcluster = " + str(calccluster) + "\n")
+                            pickedCellList = []
+                            pickedCellList.append(calcletter)
+                            pickedCellList.append(calchead)
+                            pickedCellList.append(calccluster)
+                            os.makedirs("PickedCells", exist_ok=True)
+                            with open("PickedCells/cellList", "wb") as fp:
+                                pickle.dump(pickedCellList, fp)
 
                             os.makedirs("FinalResults", exist_ok=True)
                             for indx, sortedResult in enumerate(sortedResults):

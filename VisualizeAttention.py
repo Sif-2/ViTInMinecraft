@@ -40,13 +40,13 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Visualize Self-Attention maps')
-    parser.add_argument('--patch_size', default=8, type=int, help='Patch resolution of the model.')
+    parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
     parser.add_argument('--pretrained_weights', default='NeededFiles/dino_deitsmall8_pretrain.pth', type=str,
                         help="Path to pretrained weights to load.")
     parser.add_argument("--checkpoint_key", default="teacher2", type=str,
                         help='Key to use in the checkpoint (example: "teacher")')
     parser.add_argument("--image_path", default="Testbilder/testbild.png", type=str, help="Path of the image to load.")
-    parser.add_argument("--image_size", default=(64, 64), type=int, nargs="+", help="Resize image.")
+    parser.add_argument("--image_size", default=(480, 480), type=int, nargs="+", help="Resize image.")
     parser.add_argument('--output_dir', default='AttentionMapVis', help='Path where to save visualizations.')
     parser.add_argument("--threshold", type=float, default=None, help="""We visualize masks
         obtained by thresholding the self-attention maps to keep xx% of the mass.""")

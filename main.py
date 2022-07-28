@@ -170,17 +170,18 @@ class Handler():
                        batch_size=batch_size, shuffle=True)
                 self.test_loader.append(test_loader)
     def load_models(self, modelnames=[]):
-        if not modelnames:
-            modelnames = self.models.keys()
-        for model in modelnames:
-            save_path = self.save_paths[model]
-            if not os.path.exists(save_path):
-                if not self.args.train:
-                    print(f"{save_path} not found")
-                return False
-            print("loading:", save_path)
-            self.models[model].load_state_dict(T.load(save_path, map_location=T.device(self.device)))
-        return True
+        if not self.args.vits:
+            if not modelnames:
+                modelnames = self.models.keys()
+            for model in modelnames:
+                save_path = self.save_paths[model]
+                if not os.path.exists(save_path):
+                    if not self.args.train:
+                        print(f"{save_path} not found")
+                    return False
+                print("loading:", save_path)
+                self.models[model].load_state_dict(T.load(save_path, map_location=T.device(self.device)))
+            return True
 
     def save_models(self, modelnames=[]):
         os.makedirs(self.save_path, exist_ok=True)
